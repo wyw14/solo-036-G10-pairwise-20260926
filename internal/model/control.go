@@ -108,17 +108,19 @@ type OperationRecord struct {
 }
 
 type ControlSnapshot struct {
-	Revision   string          `json:"revision"`
-	CapturedAt time.Time       `json:"captured_at"`
-	Stations   []Station       `json:"stations"`
-	Valves     []ValveState    `json:"valves"`
-	Closures   []ClosureState  `json:"closures"`
-	Pressures  []PressureState `json:"pressures"`
-	Routes     []RouteState    `json:"routes"`
-	Tracking   []TrackingState `json:"tracking"`
-	Permits    []PermitState   `json:"permits"`
-	Runs       []Run           `json:"runs"`
-	Incidents  []Incident      `json:"incidents"`
+	Revision            string          `json:"revision"`
+	CapturedAt          time.Time       `json:"captured_at"`
+	Stations            []Station       `json:"stations"`
+	Valves              []ValveState    `json:"valves"`
+	Closures            []ClosureState  `json:"closures"`
+	Pressures           []PressureState `json:"pressures"`
+	Routes              []RouteState    `json:"routes"`
+	Tracking            []TrackingState `json:"tracking"`
+	Permits             []PermitState   `json:"permits"`
+	Runs                []Run           `json:"runs"`
+	Incidents           []Incident      `json:"incidents"`
+	LineVersions        []LineVersion   `json:"line_versions"`
+	ActiveLineVersionID string          `json:"active_line_version_id,omitempty"`
 }
 
 func (s Station) Validate() error {
@@ -266,6 +268,60 @@ func (s ControlSnapshot) Validate() error {
 	for _, permit := range s.Permits {
 		if err := permit.Validate(); err != nil {
 			return fmt.Errorf("permit %s: %w", permit.Name, err)
+		}
+	}
+	if err := s.validateLineVersions(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateLineVersions verifies version-history integrity inside a persisted
+// snapshot: an active published revision must exist and every run must point
+// at a version that is present. Drafts may be invalid by content, since a
+// snapshot records work in progress rather than release-ready config.
+func (s ControlSnapshot) validateLineVersions() error {
+	if len(s.LineVersions) == 0 {
+		return nil
+	}
+	versions := make(map[string]LineVersion, len(s.LineVersions))
+	publishedNumbers := make(map[int]string)
+	for _, version := range s.LineVersions {
+		if version.ID == "" {
+			return errors.New("line version is missing an id")
+		}
+		if _, exists := versions[version.ID]; exists {
+			return fmt.Errorf("duplicate line version %s", version.ID)
+		}
+		if err := version.Status.Validate(); err != nil {
+			return fmt.Errorf("line version %s: %w", version.ID, err)
+		}
+		if version.Status == LineVersionPublished {
+			if version.Number <= 0 {
+				return fmt.Errorf("published line version %s has no revision number", version.ID)
+			}
+			if other, exists := publishedNumbers[version.Number]; exists {
+				return fmt.Errorf("line revision number %d used by %s and %s", version.Number, other, version.ID)
+			}
+			publishedNumbers[version.Number] = version.ID
+		}
+		versions[version.ID] = version
+	}
+	if s.ActiveLineVersionID != "" {
+		active, ok := versions[s.ActiveLineVersionID]
+		if !ok {
+			return fmt.Errorf("active line version %s is missing from history", s.ActiveLineVersionID)
+		}
+		if !active.Active || active.Status != LineVersionPublished {
+			return fmt.Errorf("active line version %s is not a published revision", s.ActiveLineVersionID)
+		}
+	}
+	for _, run := range s.Runs {
+		if run.LineVersionID == "" {
+			continue
+		}
+		if _, ok := versions[run.LineVersionID]; !ok {
+			return fmt.Errorf("run %s references missing line version %s", run.ID, run.LineVersionID)
 		}
 	}
 	return nil

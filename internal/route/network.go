@@ -10,19 +10,14 @@ import (
 	"github.com/wyw14/solo-036/internal/model"
 )
 
-type Segment struct {
-	ID              string  `json:"id"`
-	From            string  `json:"from"`
-	To              string  `json:"to"`
-	Length          float64 `json:"length"`
-	MaximumPressure float64 `json:"maximum_pressure"`
-	Enabled         bool    `json:"enabled"`
-}
+// Segment is the routing-graph view of a versioned line segment.
+type Segment = model.LineSegment
 
 type Network struct {
 	stations map[string]model.Station
 	segments map[string]Segment
 	outgoing map[string][]string
+	config   model.LineConfig
 }
 
 type Path struct {
@@ -62,7 +57,12 @@ func (h *candidateHeap) Pop() any {
 }
 
 func NewNetwork(stations []model.Station, segments []Segment) (*Network, error) {
-	network := &Network{stations: make(map[string]model.Station), segments: make(map[string]Segment), outgoing: make(map[string][]string)}
+	network := &Network{
+		stations: make(map[string]model.Station),
+		segments: make(map[string]Segment),
+		outgoing: make(map[string][]string),
+		config:   model.LineConfig{Stations: stations, Segments: segments},
+	}
 	for _, station := range stations {
 		if err := station.Validate(); err != nil {
 			return nil, err
@@ -81,6 +81,53 @@ func NewNetwork(stations []model.Station, segments []Segment) (*Network, error) 
 		return nil, err
 	}
 	return network, nil
+}
+
+// NetworkFromConfig builds a validated network from a versioned line config.
+func NetworkFromConfig(config model.LineConfig) (*Network, error) {
+	return NewNetwork(config.Stations, config.Segments)
+}
+
+// Config returns the station and segment content the network was built from.
+func (n *Network) Config() model.LineConfig {
+	return model.LineConfig{
+		Stations: append([]model.Station(nil), n.config.Stations...),
+		Segments: append([]Segment(nil), n.config.Segments...),
+	}
+}
+
+// CheckReachability verifies that every enabled launcher can reach every
+// enabled receiver at the minimum of their pressure limits using only
+// enabled segments. It returns nil when the network is operationally usable.
+func (n *Network) CheckReachability() error {
+	launchers := make([]model.Station, 0)
+	receivers := make([]model.Station, 0)
+	for _, station := range n.Stations() {
+		if !station.Enabled {
+			continue
+		}
+		switch station.Role {
+		case model.StationLauncher:
+			launchers = append(launchers, station)
+		case model.StationReceiver:
+			receivers = append(receivers, station)
+		}
+	}
+	if len(launchers) == 0 || len(receivers) == 0 {
+		return errors.New("network needs an enabled launcher and receiver")
+	}
+	for _, launcher := range launchers {
+		for _, receiver := range receivers {
+			path, err := n.Path(launcher.ID, receiver.ID, minimumPressure(launcher.PressureLimit, receiver.PressureLimit))
+			if err != nil {
+				return fmt.Errorf("no enabled route from %s to %s: %w", launcher.ID, receiver.ID, err)
+			}
+			if len(path.Segments) == 0 {
+				return fmt.Errorf("no enabled route from %s to %s", launcher.ID, receiver.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func (n *Network) addSegment(segment Segment) error {
@@ -246,17 +293,24 @@ func minimumPressure(left, right float64) float64 {
 	return right
 }
 
+// DefaultLineConfig is the line content the service boots with before any
+// operator-published version exists.
+func DefaultLineConfig() model.LineConfig {
+	return model.LineConfig{
+		Stations: []model.Station{
+			{ID: "station-a", Name: "North Launcher", Role: model.StationLauncher, Kilometer: 0, PressureLimit: 12.5, Enabled: true},
+			{ID: "station-b", Name: "Central Block Valve", Role: model.StationIntermediate, Kilometer: 86.4, PressureLimit: 11.8, Enabled: true},
+			{ID: "station-c", Name: "South Receiver", Role: model.StationReceiver, Kilometer: 173.2, PressureLimit: 11.2, Enabled: true},
+		},
+		Segments: []Segment{
+			{ID: "segment-a-b", From: "station-a", To: "station-b", Length: 86.4, MaximumPressure: 11.8, Enabled: true},
+			{ID: "segment-b-c", From: "station-b", To: "station-c", Length: 86.8, MaximumPressure: 11.2, Enabled: true},
+		},
+	}
+}
+
 func DefaultNetwork() *Network {
-	stations := []model.Station{
-		{ID: "station-a", Name: "North Launcher", Role: model.StationLauncher, Kilometer: 0, PressureLimit: 12.5, Enabled: true},
-		{ID: "station-b", Name: "Central Block Valve", Role: model.StationIntermediate, Kilometer: 86.4, PressureLimit: 11.8, Enabled: true},
-		{ID: "station-c", Name: "South Receiver", Role: model.StationReceiver, Kilometer: 173.2, PressureLimit: 11.2, Enabled: true},
-	}
-	segments := []Segment{
-		{ID: "segment-a-b", From: "station-a", To: "station-b", Length: 86.4, MaximumPressure: 11.8, Enabled: true},
-		{ID: "segment-b-c", From: "station-b", To: "station-c", Length: 86.8, MaximumPressure: 11.2, Enabled: true},
-	}
-	network, err := NewNetwork(stations, segments)
+	network, err := NewNetwork(DefaultLineConfig().Stations, DefaultLineConfig().Segments)
 	if err != nil {
 		panic(err)
 	}

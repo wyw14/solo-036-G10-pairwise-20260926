@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-func (s *Store) Create(station string) model.Run {
+func (s *Store) Create(station, lineVersionID string) model.Run {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	r := model.NewRun(model.NewRevision(), station, 1)
+	r.LineVersionID = lineVersionID
 	r.CreatedAt = now
 	r.UpdatedAt = now
 	s.runs[r.ID] = r

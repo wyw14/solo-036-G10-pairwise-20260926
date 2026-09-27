@@ -15,6 +15,10 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) Operations(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
+	if r.URL.Query().Get("include_history") == "true" {
+		_ = json.NewEncoder(w).Encode(h.runtime.OperationsHistory())
+		return
+	}
 	_ = json.NewEncoder(w).Encode(h.runtime.Operations())
 }
 func (h *Handler) Equipment(w http.ResponseWriter, r *http.Request) {
