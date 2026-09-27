@@ -3,12 +3,13 @@ package model
 import "time"
 
 type Run struct {
-	ID        string
-	Station   string
-	State     RunState
-	Epoch     int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID          string
+	Station     string
+	State       RunState
+	Epoch       int64
+	LineVersion int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 type Event struct {
 	ID      string

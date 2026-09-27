@@ -10,14 +10,8 @@ import (
 	"github.com/wyw14/solo-036/internal/model"
 )
 
-type Segment struct {
-	ID              string  `json:"id"`
-	From            string  `json:"from"`
-	To              string  `json:"to"`
-	Length          float64 `json:"length"`
-	MaximumPressure float64 `json:"maximum_pressure"`
-	Enabled         bool    `json:"enabled"`
-}
+// Segment 是 model.Segment 的别名，保留 route 包既有调用习惯。
+type Segment = model.Segment
 
 type Network struct {
 	stations map[string]model.Station
@@ -61,91 +55,21 @@ func (h *candidateHeap) Pop() any {
 	return item
 }
 
+// NewNetwork 依据一份线路版本内容构造拓扑；构造前复用领域校验，拒绝非法配置。
 func NewNetwork(stations []model.Station, segments []Segment) (*Network, error) {
+	if err := model.ValidateLineContent(stations, segments); err != nil {
+		return nil, err
+	}
 	network := &Network{stations: make(map[string]model.Station), segments: make(map[string]Segment), outgoing: make(map[string][]string)}
 	for _, station := range stations {
-		if err := station.Validate(); err != nil {
-			return nil, err
-		}
-		if _, exists := network.stations[station.ID]; exists {
-			return nil, fmt.Errorf("duplicate station %s", station.ID)
-		}
 		network.stations[station.ID] = station
 	}
 	for _, segment := range segments {
-		if err := network.addSegment(segment); err != nil {
-			return nil, err
-		}
-	}
-	if err := network.Validate(); err != nil {
-		return nil, err
+		network.segments[segment.ID] = segment
+		network.outgoing[segment.From] = append(network.outgoing[segment.From], segment.ID)
+		sort.Strings(network.outgoing[segment.From])
 	}
 	return network, nil
-}
-
-func (n *Network) addSegment(segment Segment) error {
-	if segment.ID == "" || segment.From == "" || segment.To == "" {
-		return errors.New("segment identity is incomplete")
-	}
-	if _, exists := n.segments[segment.ID]; exists {
-		return fmt.Errorf("duplicate segment %s", segment.ID)
-	}
-	if _, ok := n.stations[segment.From]; !ok {
-		return fmt.Errorf("segment %s has unknown source station", segment.ID)
-	}
-	if _, ok := n.stations[segment.To]; !ok {
-		return fmt.Errorf("segment %s has unknown destination station", segment.ID)
-	}
-	if segment.From == segment.To {
-		return fmt.Errorf("segment %s loops to its source", segment.ID)
-	}
-	if segment.Length <= 0 {
-		return fmt.Errorf("segment %s length must be positive", segment.ID)
-	}
-	if segment.MaximumPressure <= 0 {
-		return fmt.Errorf("segment %s pressure limit must be positive", segment.ID)
-	}
-	n.segments[segment.ID] = segment
-	n.outgoing[segment.From] = append(n.outgoing[segment.From], segment.ID)
-	sort.Strings(n.outgoing[segment.From])
-	return nil
-}
-
-func (n *Network) Validate() error {
-	if len(n.stations) < 2 {
-		return errors.New("network needs at least two stations")
-	}
-	if len(n.segments) == 0 {
-		return errors.New("network needs at least one segment")
-	}
-	launchers := 0
-	receivers := 0
-	for _, station := range n.stations {
-		if station.Role == model.StationLauncher {
-			launchers++
-		}
-		if station.Role == model.StationReceiver {
-			receivers++
-		}
-	}
-	if launchers == 0 || receivers == 0 {
-		return errors.New("network needs a launcher and receiver")
-	}
-	for _, segment := range n.segments {
-		from := n.stations[segment.From]
-		to := n.stations[segment.To]
-		if from.Kilometer >= to.Kilometer {
-			return fmt.Errorf("segment %s does not advance downstream", segment.ID)
-		}
-		limit := from.PressureLimit
-		if to.PressureLimit < limit {
-			limit = to.PressureLimit
-		}
-		if segment.MaximumPressure > limit {
-			return fmt.Errorf("segment %s limit exceeds adjacent station limit", segment.ID)
-		}
-	}
-	return nil
 }
 
 func (n *Network) Stations() []model.Station {
@@ -244,21 +168,4 @@ func minimumPressure(left, right float64) float64 {
 		return left
 	}
 	return right
-}
-
-func DefaultNetwork() *Network {
-	stations := []model.Station{
-		{ID: "station-a", Name: "North Launcher", Role: model.StationLauncher, Kilometer: 0, PressureLimit: 12.5, Enabled: true},
-		{ID: "station-b", Name: "Central Block Valve", Role: model.StationIntermediate, Kilometer: 86.4, PressureLimit: 11.8, Enabled: true},
-		{ID: "station-c", Name: "South Receiver", Role: model.StationReceiver, Kilometer: 173.2, PressureLimit: 11.2, Enabled: true},
-	}
-	segments := []Segment{
-		{ID: "segment-a-b", From: "station-a", To: "station-b", Length: 86.4, MaximumPressure: 11.8, Enabled: true},
-		{ID: "segment-b-c", From: "station-b", To: "station-c", Length: 86.8, MaximumPressure: 11.2, Enabled: true},
-	}
-	network, err := NewNetwork(stations, segments)
-	if err != nil {
-		panic(err)
-	}
-	return network
 }

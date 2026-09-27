@@ -99,26 +99,51 @@ type PermitState struct {
 }
 
 type OperationRecord struct {
-	Run       Run             `json:"run"`
-	Route     RouteState      `json:"route"`
-	Pressure  PressureState   `json:"pressure"`
-	Tracking  []TrackingState `json:"tracking"`
-	Permits   []PermitState   `json:"permits"`
-	LastError string          `json:"last_error,omitempty"`
+	Run         Run             `json:"run"`
+	LineVersion int             `json:"line_version"`
+	Route       RouteState      `json:"route"`
+	Pressure    PressureState   `json:"pressure"`
+	Tracking    []TrackingState `json:"tracking"`
+	Permits     []PermitState   `json:"permits"`
+	LastError   string          `json:"last_error,omitempty"`
 }
 
 type ControlSnapshot struct {
-	Revision   string          `json:"revision"`
-	CapturedAt time.Time       `json:"captured_at"`
-	Stations   []Station       `json:"stations"`
-	Valves     []ValveState    `json:"valves"`
-	Closures   []ClosureState  `json:"closures"`
-	Pressures  []PressureState `json:"pressures"`
-	Routes     []RouteState    `json:"routes"`
-	Tracking   []TrackingState `json:"tracking"`
-	Permits    []PermitState   `json:"permits"`
-	Runs       []Run           `json:"runs"`
-	Incidents  []Incident      `json:"incidents"`
+	Revision     string          `json:"revision"`
+	CapturedAt   time.Time       `json:"captured_at"`
+	LineVersions []LineVersion   `json:"line_versions"`
+	Stations     []Station       `json:"stations"`
+	Valves       []ValveState    `json:"valves"`
+	Closures     []ClosureState  `json:"closures"`
+	Pressures    []PressureState `json:"pressures"`
+	Routes       []RouteState    `json:"routes"`
+	Tracking     []TrackingState `json:"tracking"`
+	Permits      []PermitState   `json:"permits"`
+	Runs         []Run           `json:"runs"`
+	Incidents    []Incident      `json:"incidents"`
+}
+
+// CurrentLineVersion 返回最近发布（版本号最大）的线路版本。
+func (s ControlSnapshot) CurrentLineVersion() (LineVersion, bool) {
+	var current LineVersion
+	found := false
+	for _, version := range s.LineVersions {
+		if version.Status == LineVersionPublished && (!found || version.Number > current.Number) {
+			current = version
+			found = true
+		}
+	}
+	return current, found
+}
+
+// LineVersionByNumber 按版本号查找线路版本，供旧作业回看。
+func (s ControlSnapshot) LineVersionByNumber(number int) (LineVersion, bool) {
+	for _, version := range s.LineVersions {
+		if version.Number == number {
+			return version, true
+		}
+	}
+	return LineVersion{}, false
 }
 
 func (s Station) Validate() error {
@@ -234,6 +259,23 @@ func (s ControlSnapshot) Validate() error {
 	if len(stations) < 2 {
 		return errors.New("at least two stations are required")
 	}
+	seenNumbers := make(map[int]struct{}, len(s.LineVersions))
+	publishedCount := 0
+	for _, version := range s.LineVersions {
+		if err := version.Validate(); err != nil {
+			return err
+		}
+		if _, exists := seenNumbers[version.Number]; exists {
+			return fmt.Errorf("duplicate line version number %d", version.Number)
+		}
+		seenNumbers[version.Number] = struct{}{}
+		if version.Status == LineVersionPublished {
+			publishedCount++
+		}
+	}
+	if len(s.LineVersions) > 0 && publishedCount == 0 {
+		return errors.New("line versions exist but none is published")
+	}
 	for _, station := range s.Stations {
 		if err := station.Validate(); err != nil {
 			return fmt.Errorf("station %s: %w", station.ID, err)
@@ -288,6 +330,7 @@ func (s ControlSnapshot) Operation(runID string) (OperationRecord, bool) {
 	for _, run := range s.Runs {
 		if run.ID == runID {
 			result.Run = run
+			result.LineVersion = run.LineVersion
 			found = true
 			break
 		}

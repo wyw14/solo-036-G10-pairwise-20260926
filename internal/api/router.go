@@ -26,6 +26,16 @@ func NewRouter(runtime *service.Runtime) http.Handler {
 		r.Get("/snapshot", h.Snapshot)
 		r.Post("/snapshot", h.PersistSnapshot)
 		r.Get("/recovery/barrier", h.RecoveryBarrier)
+		r.Route("/line-versions", func(r chi.Router) {
+			r.Get("/", h.ListLineVersions)
+			r.Post("/", h.CreateLineDraft)
+			r.Get("/current", h.CurrentLineVersion)
+			r.Get("/{version:[0-9]+}", h.GetLineVersion)
+			r.Put("/{version:[0-9]+}", h.UpdateLineDraft)
+			r.Post("/{version:[0-9]+}/validate", h.ValidateLineDraft)
+			r.Post("/{version:[0-9]+}/publish", h.PublishLineVersion)
+		})
+		r.Get("/operations/{runID}/line-version", h.OperationLineVersion)
 	})
 	return router
 }
